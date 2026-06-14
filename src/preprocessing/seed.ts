@@ -2,7 +2,7 @@ import logger from "src/utils/logger.js";
 import { extractAllPDFs } from "./extractText.js";
 import { buildInvertedIndex } from "./invertedIndex.js";
 
-async function seed() {
+export async function seed() {
     try {
         logger.info("Starting preprocessing pipeline");
 
@@ -17,5 +17,3 @@ async function seed() {
         logger.error("Seed failed", error);
     }
 }
-
-seed();

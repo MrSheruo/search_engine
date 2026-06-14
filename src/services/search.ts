@@ -44,5 +44,3 @@ export function search(query: string) {
     return booksInfo
 }
 
-const query = "Books About Probability and Statistics, Python"
-console.log(JSON.stringify(search(query), null, 2));
