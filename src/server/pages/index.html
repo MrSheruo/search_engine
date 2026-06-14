@@ -5,23 +5,218 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <title>Document</title>
+    <title>Book Search Engine</title>
 </head>
 
-<body>
-    <div class="flex items-center justify-center h-screen">
-        <div class="flex flex-col items-center justify-center">
-            <h1 class="text-4xl font-bold">Search Engine</h1>
-            <form action="/api/search" method="get" class="flex items-center gap-2">
-                <input id="searchInput" type="text" name="q" placeholder="Search"
-                    class="border border-gray-300 rounded-md p-2">
-                <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded-md">Search</button>
-            </form>
-            <div id="results" class="flex flex-col gap-2 mt-4">
-
+<body class="min-h-screen bg-slate-50 text-slate-950">
+    <main class="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-5 py-8 sm:px-8">
+        <section class="mb-8 border-b border-slate-200 pb-6">
+            <div class="mb-5 flex flex-col gap-2">
+                <p class="text-sm font-medium uppercase tracking-wide text-slate-500">Technical library</p>
+                <h1 class="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">Book Search Engine</h1>
+                <p class="max-w-2xl text-sm leading-6 text-slate-600">
+                    Search indexed PDFs with BM25 ranking. Results update automatically as you type.
+                </p>
             </div>
-        </div>
-    </div>
+
+            <form id="searchForm" class="relative" autocomplete="off">
+                <label for="searchInput" class="sr-only">Search books</label>
+                <input id="searchInput" type="search" name="q"
+                    placeholder="Try design, machine learning, browser networking..."
+                    class="h-14 w-full rounded-lg border border-slate-300 bg-white px-4 pr-32 text-base outline-none transition focus:border-slate-900 focus:ring-4 focus:ring-slate-200">
+                <div class="absolute right-2 top-2 flex h-10 items-center gap-2">
+                    <button id="clearButton" type="button"
+                        class="hidden rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100">
+                        Clear
+                    </button>
+                    <div id="statusPill"
+                        class="rounded-md bg-slate-100 px-3 py-2 text-sm font-medium text-slate-500">
+                        Idle
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <section class="flex min-h-0 flex-1 flex-col">
+            <div class="mb-3 flex items-center justify-between gap-4">
+                <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500">Results</h2>
+                <p id="resultCount" class="text-sm text-slate-500">Start typing to search</p>
+            </div>
+
+            <div id="results" class="grid gap-3" aria-live="polite"></div>
+        </section>
+    </main>
+
+    <template id="resultTemplate">
+        <article class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div class="min-w-0">
+                    <h3 class="result-title break-words text-base font-semibold text-slate-950"></h3>
+                    <p class="result-file mt-1 break-words text-sm text-slate-500"></p>
+                </div>
+                <div class="shrink-0 rounded-md bg-slate-100 px-3 py-2 text-right">
+                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Score</p>
+                    <p class="result-score text-sm font-semibold text-slate-900"></p>
+                </div>
+            </div>
+            <dl class="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 text-sm sm:grid-cols-3">
+                <div>
+                    <dt class="text-slate-500">Tokens</dt>
+                    <dd class="result-tokens font-medium text-slate-800"></dd>
+                </div>
+                <div>
+                    <dt class="text-slate-500">Unique terms</dt>
+                    <dd class="result-terms font-medium text-slate-800"></dd>
+                </div>
+                <div>
+                    <dt class="text-slate-500">Document ID</dt>
+                    <dd class="result-id font-medium text-slate-800"></dd>
+                </div>
+            </dl>
+        </article>
+    </template>
+
+    <script>
+        const DEBOUNCE_DELAY = 250;
+        const searchInput = document.getElementById("searchInput");
+        const searchForm = document.getElementById("searchForm");
+        const clearButton = document.getElementById("clearButton");
+        const statusPill = document.getElementById("statusPill");
+        const resultCount = document.getElementById("resultCount");
+        const results = document.getElementById("results");
+        const resultTemplate = document.getElementById("resultTemplate");
+
+        let debounceTimer;
+        let activeController;
+        let lastQuery = "";
+        let requestSequence = 0;
+
+        function setStatus(label, tone = "idle") {
+            const tones = {
+                error: "bg-red-50 text-red-700",
+                idle: "bg-slate-100 text-slate-500",
+                loading: "bg-blue-50 text-blue-700",
+                ready: "bg-emerald-50 text-emerald-700",
+            };
+
+            statusPill.className = `rounded-md px-3 py-2 text-sm font-medium ${tones[tone]}`;
+            statusPill.textContent = label;
+        }
+
+        function setMessage(title, message) {
+            results.innerHTML = `
+                <div class="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+                    <h3 class="text-base font-semibold text-slate-900">${title}</h3>
+                    <p class="mt-2 text-sm text-slate-500">${message}</p>
+                </div>
+            `;
+        }
+
+        function formatNumber(value) {
+            return new Intl.NumberFormat().format(value);
+        }
+
+        function renderResults(items, query) {
+            results.replaceChildren();
+
+            if (items.length === 0) {
+                resultCount.textContent = `No matches for "${query}"`;
+                setMessage("No results found", "Try a shorter query or a different technical topic.");
+                return;
+            }
+
+            const fragment = document.createDocumentFragment();
+
+            for (const item of items) {
+                const node = resultTemplate.content.cloneNode(true);
+                node.querySelector(".result-title").textContent = item.title || item.filename || "Untitled document";
+                node.querySelector(".result-file").textContent = item.filename || "No filename";
+                node.querySelector(".result-score").textContent = Number(item.score ?? 0).toFixed(4);
+                node.querySelector(".result-tokens").textContent = formatNumber(item.totalTokens ?? 0);
+                node.querySelector(".result-terms").textContent = formatNumber(item.uniqueTerms ?? 0);
+                node.querySelector(".result-id").textContent = item.id ?? item.docId ?? "-";
+                fragment.appendChild(node);
+            }
+
+            results.appendChild(fragment);
+            resultCount.textContent = `${items.length} result${items.length === 1 ? "" : "s"} for "${query}"`;
+        }
+
+        async function runSearch(query) {
+            const normalizedQuery = query.trim();
+            lastQuery = normalizedQuery;
+            clearButton.classList.toggle("hidden", normalizedQuery.length === 0);
+
+            if (!normalizedQuery) {
+                if (activeController) {
+                    activeController.abort();
+                }
+
+                setStatus("Idle");
+                resultCount.textContent = "Start typing to search";
+                setMessage("Search your indexed books", "Results will update here after you pause typing.");
+                return;
+            }
+
+            if (activeController) {
+                activeController.abort();
+            }
+
+            const sequence = ++requestSequence;
+            activeController = new AbortController();
+            setStatus("Searching", "loading");
+
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(normalizedQuery)}`, {
+                    signal: activeController.signal,
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Search failed with status ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (sequence !== requestSequence || normalizedQuery !== lastQuery) {
+                    return;
+                }
+
+                renderResults(Array.isArray(data) ? data : [], normalizedQuery);
+                setStatus("Updated", "ready");
+            } catch (error) {
+                if (error.name === "AbortError") {
+                    return;
+                }
+
+                resultCount.textContent = "Search failed";
+                setMessage("Could not search", "Check that the server is running and the index has been seeded.");
+                setStatus("Error", "error");
+            }
+        }
+
+        function queueSearch() {
+            window.clearTimeout(debounceTimer);
+            debounceTimer = window.setTimeout(() => {
+                runSearch(searchInput.value);
+            }, DEBOUNCE_DELAY);
+        }
+
+        searchInput.addEventListener("input", queueSearch);
+
+        searchForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            window.clearTimeout(debounceTimer);
+            runSearch(searchInput.value);
+        });
+
+        clearButton.addEventListener("click", () => {
+            searchInput.value = "";
+            searchInput.focus();
+            runSearch("");
+        });
+
+        setMessage("Search your indexed books", "Results will update here after you pause typing.");
+    </script>
 </body>
 
 </html>
